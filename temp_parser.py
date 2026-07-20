@@ -11,7 +11,10 @@ from bs4 import BeautifulSoup
 # - зберігають дані у вигляді атрибутів
 # - автоматично генерують методи __init__, __repr__, __eq__ та ін.
 # - роблять код більш чистим та зручним для обробки структурованих даних
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, astuple
+
+# Модуль дозволяє читати та записувати дані в CSV файл
+import csv
 
 # Клас Tag - представляє один HTML-елемент в BeautifulSoup
 # Використовується для типізації змінних та функцій, які повертають HTML-елементи,
@@ -72,6 +75,9 @@ session.mount("http://", HTTPAdapter(max_retries=retry_strategy))
 
 # Базовий домен сайту
 BASE_URL = "https://webscraper.io/"
+
+# Формуємо URL сторінки з ноутбуками, використовуючи базовий URL
+LAPTOP_URL = urljoin(BASE_URL, "test-sites/e-commerce/static/computers/laptops/")
 
 # Головна сторінка магазину
 # urljoin поєднує базовий URL та відносний шлях,
@@ -155,47 +161,9 @@ class Product:
     # Кількість відгуків про товар
     num_of_reviews: int
 
-def parse_single_product(product: Tag) -> Product:
-    return Product(
-        # Назва товару
-        # .select_one(".title") - шукає перший елемент з класом "title" всередині блоку товару
-        # ["title"] - використовуємо значення HTML-атрибуту 'title'
-        title=product.select_one(".title")["title"],
-
-        # Опис товару
-        # .text - повертає весь текст всередині HTML-тега
-        description=product.select_one(".description").text,
-
-        # Ціна товару
-        # .text - отримуємо рядок типу "$123.45"
-        # .replace("$", "") - прибираємо символ валюти, щоб залишилися лише цифри
-        # float(...) - перетворюємо текст в число з плаваючою крапкою
-        price=float(
-            product
-            .select_one(".price")
-            .text
-            .replace("$", "")
-        ),
-
-        # Рейтинг товару
-        # [data-rating] - HTML-атрибут з числовим значенням рейтингу
-        # int(...) - перетворюємо текстовий рейтинг в ціле число
-        rating=int(
-            product
-            .select_one("[data-rating]")["data-rating"]
-        ),
-
-        # Кількість відгуків
-        # .text - рядок типу "12 reviews"
-        # .split()[0] - розбиваємо рядок за пробілом та отримуємо перше слово ("12")
-        # int(...) - перетворюємо перше слово в число
-        num_of_reviews=int(
-            product
-            .select_one(".review-count")
-            .text
-            .split()[0]
-        )
-    )
+# Отримуємо імена всіх полів класу Product для використання в CSV-заголовку,
+# що дозволить автоматично оновлювати заголовки, якщо ми змінимо модель даних
+PRODUCT_FIELDS = [field.name for field in fields(Product)]
 
 def get_home_products() -> list[Product]:
     """
@@ -243,30 +211,119 @@ def get_home_products() -> list[Product]:
         print(f"⚠️ Неочікувана помилка: {e}")
         return None
 
-def main():
+def parse_single_product(product: Tag) -> Product:
+    return Product(
+        # Назва товару
+        # .select_one(".title") - шукає перший елемент з класом "title" всередині блоку товару
+        # ["title"] - використовуємо значення HTML-атрибуту 'title'
+        title=product.select_one(".title")["title"],
+
+        # Опис товару
+        # .text - повертає весь текст всередині HTML-тега
+        description=product.select_one(".description").text,
+
+        # Ціна товару
+        # .text - отримуємо рядок типу "$123.45"
+        # .replace("$", "") - прибираємо символ валюти, щоб залишилися лише цифри
+        # float(...) - перетворюємо текст в число з плаваючою крапкою
+        price=float(
+            product
+            .select_one(".price")
+            .text
+            .replace("$", "")
+        ),
+
+        # Рейтинг товару
+        # [data-rating] - HTML-атрибут з числовим значенням рейтингу
+        # int(...) - перетворюємо текстовий рейтинг в ціле число
+        rating=int(
+            product
+            .select_one("[data-rating]")["data-rating"]
+        ),
+
+        # Кількість відгуків
+        # .text - рядок типу "12 reviews"
+        # .split()[0] - розбиваємо рядок за пробілом та отримуємо перше слово ("12")
+        # int(...) - перетворюємо перше слово в число
+        num_of_reviews=int(
+            product
+            .select_one(".review-count")
+            .text
+            .split()[0]
+        )
+    )
+
+def get_laptop_page_products() -> list[Product]:
     """
-    Головна функція, яка керує логікою роботи парсера
-    Виконує отримання даних, обробку помилок та закриття ресурсів.
+    Завантажує сторінку з ноутбуками та парсить інформацію про товари
+    Використовує HTTP-сесію та заголовки для стабільності
+
+    Returns:
+        list[Product]: Список об'єктів Product з даними про ноутбуки
     """
     try:
-        # Отримуємо список товарів
-        products = get_home_products()
+        # Виконуємо HTTP GET-запит через сесію з заголовками
+        response = session.get(
+            LAPTOP_URL,
+            headers=HEADERS,
+            timeout=10,
+            verify=True
+        )
+        response.raise_for_status()
 
-        if products:
-            print("✅ Дані успішно отримано та оброблено!\n")
+        # Створюємо об'єкт BeautifulSoup для парсингу HTML
+        soup = BeautifulSoup(response.content, features="html.parser")
 
-            # Виводимо інформацію про перші 3 товари для перевірки
-            for index, product in enumerate(products, 1):
-                print(f"{index}. {product}")
-        else:
-            print("❌ Не вдалося отримати дані. Перевірте підключення або спробуйте пізніше.")
+        # Знаходимо всі контейнери (блоки) з товарами на сторінці
+        products = soup.select(".card-body")
+
+        # Перетворюємо кожен HTML-елемент у об'єкт Product
+        return [parse_single_product(product) for product in products]
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Помилка при виконанні запиту: {e}")
+        return None
+    except Exception as e:
+        print(f"⚠️ Неочікувана помилка: {e}")
+        return None
+
+
+def write_products_to_csv(products: list[Product]) -> None:
+    """
+    Зберігає список товарів в CSV-файл
+
+    Args:
+        products: Список об'єктів Product для збереження
+    """
+    # Відкриваємо файл для запису
+    with open("products.csv", "w", newline='', encoding='utf-8') as f:
+        # Створюємо об'єкт writer для запису даних в CSV
+        writer = csv.writer(f)
+
+        # Записуємо заголовки стовпців
+        writer.writerow(PRODUCT_FIELDS)
+
+        # Записуємо дані кожного товару
+        # (astuple перетворює об'єкт Product в кортеж значень)
+        writer.writerows([astuple(product) for product in products])
+
+def main():
+    """
+    Головна функція програми:
+    - Отримує список ноутбуків зі сторінки
+    - Зберігає їх у CSV-файл
+    - Обробляє помилки та закриває ресурси
+    """
+    try:
+        # Отримуємо товари та зберігаємо їх в CSV
+        write_products_to_csv(get_laptop_page_products())
+        print("✅ Дані успішно збережено в файл 'products.csv'")
 
     except KeyboardInterrupt:
         print("\n🛑 Роботу програми перервано користувачем.")
     except Exception as e:
         print(f"❌ Критична помилка: {e}")
     finally:
-        # Обов'язково закриваємо сесію
         session.close()
 
 if __name__ == "__main__":
